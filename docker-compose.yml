@@ -1,0 +1,92 @@
+networks:
+  quack-network:
+    name: quack-network
+
+volumes:
+  postgres-data:
+    driver: local
+  kestra-data:
+    driver: local
+
+services:
+  postgres:
+    image: postgres:18
+    networks:
+      - quack-network
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    environment:
+      POSTGRES_DB: kestra
+      POSTGRES_USER: kestra
+      POSTGRES_PASSWORD: k3str4
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  duckdb:
+    platform: linux/amd64
+    build: .
+    networks:
+      - quack-network
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      DUCKDB_TOKEN: ${DUCKDB_TOKEN:-abc123}
+
+  kestra:
+    image: kestra/kestra:v1.3.30
+    pull_policy: missing
+    stop_grace_period: 6m
+    user: "root"
+    command: server standalone
+    networks:
+      - quack-network
+    env_file:
+      - .env
+    volumes:
+      - kestra-data:/app/storage
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/kestra-wd:/tmp/kestra-wd
+      - ./flows:/workflows
+    environment:
+      KESTRA_CONFIGURATION: |
+        datasources:
+          postgres:
+            url: jdbc:postgresql://postgres:5432/kestra
+            driverClassName: org.postgresql.Driver
+            username: kestra
+            password: k3str4
+        kestra:
+          server:
+            basicAuth:
+              username: admin@kestra.io
+              password: Admin1234
+          repository:
+            type: postgres
+          storage:
+            type: local
+            local:
+              base-path: "/app/storage"
+          queue:
+            type: postgres
+          tasks:
+            tmp-dir:
+              path: /tmp/kestra-wd/tmp
+          url: http://localhost:8085/
+        micronaut:
+          io:
+            watch:
+              enabled: true
+              paths:
+                - /workflows
+        tutorialFlows:
+          enabled: false
+    ports:
+      - "8085:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy

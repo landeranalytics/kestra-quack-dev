@@ -1,0 +1,51 @@
+id: fetch_exchange_rates
+namespace: quack.demo
+
+tasks:
+  - id: set_ts
+    type: io.kestra.plugin.core.debug.Return
+    format: "{{ now() | date('yyyy-MM-dd HH:mm:ss') }}"
+
+  - id: create_row
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: duckdb/duckdb:latest
+    interpreter: ["/duckdb", "-c"]
+    failFast: false
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      networkMode: quack-network
+    commands:
+      - |
+        INSTALL quack;
+        LOAD quack;
+        ATTACH 'quack:duckdb:8080' AS remote (TOKEN '{{ secret('DUCKDB_TOKEN') }}', DISABLE_SSL true);
+        INSERT INTO remote.rates (ts, usd) VALUES (TIMESTAMP '{{ outputs.set_ts.value }}', 1.0);
+
+  - id: currencies
+    type: io.kestra.plugin.core.flow.ForEach
+    values: ["EUR", "JPY", "GBP", "CNY", "CHF"]
+    concurrencyLimit: 0
+    tasks:
+      - id: convert
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: quack.demo
+        flowId: convert
+        wait: true
+        inputs:
+          currency: "{{ taskrun.value }}"
+          ts: "{{ outputs.set_ts.value }}"
+
+errors:
+  - id: delete_row_on_failure
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: duckdb/duckdb:latest
+    interpreter: ["/duckdb", "-c"]
+    failFast: false
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      networkMode: quack-network
+    commands:
+      - |
+        INSTALL quack;
+        LOAD quack;
+        CALL quack_query('quack:duckdb:8080', 'DELETE FROM rates WHERE ts = TIMESTAMP ''{{ outputs.set_ts.value }}''', token := '{{ secret('DUCKDB_TOKEN') }}', disable_ssl := true);

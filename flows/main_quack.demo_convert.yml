@@ -1,0 +1,29 @@
+id: convert
+namespace: quack.demo
+
+inputs:
+  - id: currency
+    type: STRING
+  - id: ts
+    type: STRING
+
+tasks:
+  - id: write_rate
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: duckdb/duckdb:latest
+    interpreter: ["/duckdb", "-c"]
+    failFast: false
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      networkMode: quack-network
+    commands:
+      - |
+        INSTALL quack;
+        LOAD quack;
+        SET VARIABLE rate = (SELECT rates.{{ inputs.currency }} FROM read_json_auto('https://api.frankfurter.dev/v1/latest?base=USD&symbols={{ inputs.currency }}'));
+        CALL quack_query(
+          'quack:duckdb:8080',
+          'UPDATE rates SET {{ inputs.currency }} = ' || getvariable('rate') || ' WHERE ts = TIMESTAMP ''{{ inputs.ts }}''', token := '{{ secret('DUCKDB_TOKEN') }}',
+          disable_ssl := true
+        );
+        SELECT 'inserted_{{ inputs.currency }}' as status;
